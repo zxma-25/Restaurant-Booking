@@ -6,7 +6,13 @@
 
 /* Floor plan */
 .plan { background: #fff; border: 1px solid #e5e5e5; border-radius: 20px; padding: 20px; position: relative; }
-.plan-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px 10px; padding: 8px 28px 8px 0; }
+.plan { overflow-x: auto; }
+.plan-canvas { position: relative; height: 440px; min-width: 640px; margin-right: 26px; border-radius: 12px; }
+.plan-canvas .tbl { position: absolute; width: 16%; transform: translate(-50%, -50%); }
+.plan-canvas.editing { background-image: radial-gradient(#d4d4d4 1px, transparent 1px); background-size: 24px 24px; background-color: #fafafa; }
+.editing .tbl { cursor: grab; touch-action: none; user-select: none; }
+.editing .tbl:active { cursor: grabbing; z-index: 2; }
+.editing .tbl .body { transform: none !important; }
 .zone { border: 1px solid #ececec; border-radius: 0 0 14px 14px; padding: 14px 28px; font-weight: 700; letter-spacing: .18em; font-size: 12px; text-transform: uppercase; background: #fff; }
 .side-tag { position: absolute; right: 0; writing-mode: vertical-rl; font-size: 10px; letter-spacing: .2em; text-transform: uppercase; font-weight: 700; border: 1px solid #e5e5e5; border-right: 0; border-radius: 10px 0 0 10px; padding: 12px 6px; background: #fff; }
 
@@ -34,7 +40,13 @@
 
 @media (max-width: 640px) {
   .plan { padding: 12px; overflow-x: auto; }
-  .plan-grid { min-width: 560px; }
+  .plan { overflow-x: auto; }
+.plan-canvas { position: relative; height: 440px; min-width: 640px; margin-right: 26px; border-radius: 12px; }
+.plan-canvas .tbl { position: absolute; width: 16%; transform: translate(-50%, -50%); }
+.plan-canvas.editing { background-image: radial-gradient(#d4d4d4 1px, transparent 1px); background-size: 24px 24px; background-color: #fafafa; }
+.editing .tbl { cursor: grab; touch-action: none; user-select: none; }
+.editing .tbl:active { cursor: grabbing; z-index: 2; }
+.editing .tbl .body { transform: none !important; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
