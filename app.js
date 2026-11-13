@@ -46,16 +46,31 @@ const stars = r => `<span class="text-amber-500">★</span> <b>${r.toFixed(1)}</
 const imgTag = (src, cls) => `<img src="${src}" alt="" loading="lazy" class="${cls}" onerror="this.remove()">`;
 const logo = r => `<div class="w-14 h-14 rounded-xl border-2 border-white shadow flex items-center justify-center text-white font-extrabold text-lg" style="background:${r.color}" title="Logo placeholder">${r.name.split(/[ &']+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('')}</div>`;
 
-/* ---------- Table generator (deterministic per restaurant/date/time) ---------- */
+/* ---------- Floor plan layouts ---------- */
 function rng(seed) { let h = 2166136261; for (const c of seed) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 1000) / 1000; }; }
+const pad = n => String(n).padStart(2, '0');
+const LKEY = 'reserva-layouts-v1';
+function loadLayouts() { try { return JSON.parse(localStorage.getItem(LKEY)) || {}; } catch (e) { return {}; } }
+function storeLayouts() { try { localStorage.setItem(LKEY, JSON.stringify(S.layouts)); return true; } catch (e) { return false; } }
+S.layouts = loadLayouts(); S.edit = false; S.draft = null; S.editSel = null;
+// x / y are the table centre as a % of the floor plan canvas
+function defaultLayout(r) {
+  const rand = rng(r.id + 'layout');
+  return Array.from({ length: 15 }, (_, i) => ({ id: 'T-' + pad(i + 1), seats: [2, 4, 4, 6][Math.floor(rand() * 4)], x: 10 + (i % 5) * 20, y: 20 + Math.floor(i / 5) * 30 }));
+}
+const layoutFor = r => S.layouts[r.id] || defaultLayout(r);
 function tablesFor(r) {
-  const rand = rng(r.id + S.date + S.time);
-  return Array.from({ length: 15 }, (_, i) => {
-    const id = 'T-' + String(i + 1).padStart(2, '0'), x = rand(), seats = [2, 4, 4, 6][Math.floor(rand() * 4)];
+  return layoutFor(r).map(t => {
+    const rand = rng(r.id + S.date + S.time + t.id), x = rand(), secs = 600 + Math.floor(rand() * 6000);
     let state = x < .2 ? 'reserved' : x < .4 ? 'soon' : 'empty';
-    if (S.taken[r.id + S.date + S.time + id]) state = 'reserved';
-    return { id, seats, state, secs: 600 + Math.floor(rand() * 6000) };
+    if (S.taken[r.id + S.date + S.time + t.id]) state = 'reserved';
+    return { ...t, state, secs };
   });
+}
+function toast(msg) {
+  const el = document.createElement('div');
+  el.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-ink text-white text-sm font-semibold rounded-full px-5 py-3 shadow-lg';
+  el.textContent = msg; document.body.appendChild(el); setTimeout(() => el.remove(), 2200);
 }
 
 /* ---------- Views ---------- */
@@ -104,7 +119,7 @@ function restaurant(r) {
     <div class="flex gap-2 mt-3">${r.tags.map(t => `<span class="text-xs font-semibold bg-neutral-100 rounded-full px-3 py-1">${t}</span>`).join('')}</div>
     <nav class="flex gap-6 border-b border-neutral-200 mt-6">${tabs.map(([k, l]) => `<button data-t="${k}" class="py-3 font-semibold border-b-2 ${S.tab === k ? 'border-brand text-brand' : 'border-transparent text-neutral-500'}">${l}</button>`).join('')}</nav>
     <div id="tab" class="mt-6"></div>`;
-  document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; restaurant(r); });
+  document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.edit = false; restaurant(r); });
   ({ book: () => booking(r), menu: () => menu(r), reviews: () => reviews(r) })[S.tab]();
 }
 
@@ -125,42 +140,63 @@ function reviews(r) {
       <p class="text-amber-500 mt-3">${'★'.repeat(s)}${'☆'.repeat(5 - s)}</p><p class="text-sm text-neutral-700 mt-2">${t}</p></div>`).join('')}</div>`;
 }
 
+const pill = n => '<i></i>'.repeat(n / 2);
+
 function booking(r) {
-  const tables = tablesFor(r);
-  if (S.table && !tables.find(t => t.id === S.table && t.state === 'empty' && t.seats >= S.party)) S.table = null;
+  const edit = S.edit;
+  const tables = edit ? S.draft.map(t => ({ ...t, state: 'empty' })) : tablesFor(r);
+  if (!edit && S.table && !tables.find(t => t.id === S.table && t.state === 'empty' && t.seats >= S.party)) S.table = null;
   const sel = tables.find(t => t.id === S.table);
   const cnt = s => tables.filter(t => t.state === s && (s !== 'empty' || t.seats >= S.party)).length;
-  const pill = n => `<i></i>`.repeat(n / 2);
-  $('#tab').innerHTML = `
+  const controls = `
     <div class="flex flex-wrap gap-3 items-end mb-5">
       <label class="text-xs font-semibold text-neutral-500">Date<input id="bdate" type="date" value="${S.date}" min="${new Date().toISOString().slice(0, 10)}" class="block mt-1 border border-neutral-200 rounded-xl px-3 py-2 text-sm text-ink"></label>
       <label class="text-xs font-semibold text-neutral-500">Guests<select id="bparty" class="block mt-1 border border-neutral-200 rounded-xl px-3 py-2 text-sm text-ink">${[1, 2, 3, 4, 5, 6].map(n => `<option ${n === S.party ? 'selected' : ''} value="${n}">${n} guest${n > 1 ? 's' : ''}</option>`).join('')}</select></label>
       <div class="flex gap-2 overflow-x-auto no-scrollbar">${TIMES.map(t => `<button data-time="${t}" class="shrink-0 rounded-full px-3 py-2 text-sm font-semibold ${t === S.time ? 'bg-brand text-white' : 'bg-neutral-100 hover:bg-neutral-200'}">${t}</button>`).join('')}</div>
-    </div>
-    <div class="rounded-3xl border border-neutral-200 p-3 sm:p-5 bg-neutral-50/50">
-      <div class="flex flex-wrap justify-between gap-3 text-sm px-1 pb-4">
-        <span class="text-neutral-500">Available tables <b class="text-ink">${cnt('empty') + cnt('soon')}</b></span>
-        <div class="flex flex-wrap gap-x-4 gap-y-1 text-neutral-500">
-          <span><i class="dot border border-brand"></i>Selected</span><span><i class="dot bg-neutral-200"></i>Empty <b class="text-ink">${cnt('empty')}</b></span>
-          <span><i class="dot bg-brand"></i>Reserved <b class="text-ink">${cnt('reserved')}</b></span><span><i class="dot bg-soon"></i>Available soon <b class="text-ink">${cnt('soon')}</b></span>
-        </div>
+      <button id="editL" class="ml-auto rounded-full border border-neutral-300 hover:border-brand hover:text-brand px-4 py-2 text-sm font-semibold">Edit floor plan</button>
+    </div>`;
+  const legend = `
+    <div class="flex flex-wrap justify-between gap-3 text-sm px-1 pb-4">
+      <span class="text-neutral-500">Available tables <b class="text-ink">${cnt('empty') + cnt('soon')}</b></span>
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-neutral-500">
+        <span><i class="dot border border-brand"></i>Selected</span><span><i class="dot bg-neutral-200"></i>Empty <b class="text-ink">${cnt('empty')}</b></span>
+        <span><i class="dot bg-brand"></i>Reserved <b class="text-ink">${cnt('reserved')}</b></span><span><i class="dot bg-soon"></i>Available soon <b class="text-ink">${cnt('soon')}</b></span>
       </div>
+    </div>`;
+  const editBar = `
+    <div class="flex flex-wrap items-center gap-2 px-1 pb-4 text-sm">
+      <span class="font-bold text-brand">Editing floor plan</span><span class="text-neutral-500">Drag tables to move them.</span><div class="flex-1"></div>
+      <button id="addT" class="rounded-full bg-neutral-100 hover:bg-neutral-200 font-semibold px-4 py-2">+ Add table</button>
+      <button id="resetL" class="rounded-full bg-neutral-100 hover:bg-neutral-200 font-semibold px-4 py-2">Reset</button>
+      <button id="cancelE" class="rounded-full bg-neutral-100 hover:bg-neutral-200 font-semibold px-4 py-2">Cancel</button>
+      <button id="saveE" class="rounded-full bg-brand text-white font-bold px-5 py-2">Save layout</button>
+    </div>`;
+  const footer = `
+    <div class="flex items-center justify-between gap-4 pt-4 px-1">
+      <div><p class="text-xs text-neutral-500">${sel ? 'Table selected' : 'No table selected'}</p>
+        <p class="font-bold">${sel ? `${sel.id} <span class="font-normal text-neutral-500 text-sm">(${sel.seats} seats)</span>` : 'Tap an empty table on the plan'}</p></div>
+      <button id="bookBtn" ${sel ? '' : 'disabled'} class="rounded-full bg-brand text-white font-bold px-7 py-3 disabled:bg-neutral-300 disabled:cursor-not-allowed hover:brightness-110">Book table</button>
+    </div>`;
+  $('#tab').innerHTML = `
+    ${edit ? '' : controls}
+    <div class="rounded-3xl border border-neutral-200 p-3 sm:p-5 bg-neutral-50/50">
+      ${edit ? editBar : legend}
       <div class="plan">
         <div class="flex gap-3 mb-4"><div class="zone">Cashier</div><div class="flex-1"></div><div class="zone">Dessert bar</div></div>
         <div class="side-tag" style="top:35%">Restrooms</div>
-        <div class="plan-grid">${tables.map(t => {
-          const small = t.state === 'empty' && t.seats < S.party, cls = t.id === S.table ? 'selected' : small ? 'empty small' : t.state;
-          return `<button class="tbl ${cls}" data-id="${t.id}" aria-label="Table ${t.id}, ${t.seats} seats, ${t.state}">
-            <div class="seats">${pill(t.seats)}</div>
-            <div class="body"><span>${t.id}</span>${t.state === 'soon' ? `<small data-end="${Date.now() + t.secs * 1000}">${fmt(t.secs)}</small>` : `<small>${t.seats} seats</small>`}</div>
-            <div class="seats">${pill(t.seats)}</div></button>`; }).join('')}</div>
+        <div class="plan-canvas ${edit ? 'editing' : ''}" id="canvas">${tables.map(t => {
+          const small = !edit && t.state === 'empty' && t.seats < S.party;
+          const cls = edit ? (t.id === S.editSel ? 'selected' : 'empty') : t.id === S.table ? 'selected' : small ? 'empty small' : t.state;
+          const sub = !edit && t.state === 'soon' ? `<small data-end="${Date.now() + t.secs * 1000}">${fmt(t.secs)}</small>` : `<small>${t.seats} seats</small>`;
+          return `<button class="tbl ${cls}" style="left:${t.x}%;top:${t.y}%" data-id="${t.id}" aria-label="Table ${t.id}, ${t.seats} seats">
+            <div class="seats">${pill(t.seats)}</div><div class="body"><span>${t.id}</span>${sub}</div><div class="seats">${pill(t.seats)}</div></button>`; }).join('')}</div>
       </div>
-      <div class="flex items-center justify-between gap-4 pt-4 px-1">
-        <div><p class="text-xs text-neutral-500">${sel ? 'Table selected' : 'No table selected'}</p>
-          <p class="font-bold">${sel ? `${sel.id} <span class="font-normal text-neutral-500 text-sm">(${sel.seats} seats)</span>` : 'Tap an empty table on the plan'}</p></div>
-        <button id="bookBtn" ${sel ? '' : 'disabled'} class="rounded-full bg-brand text-white font-bold px-7 py-3 disabled:bg-neutral-300 disabled:cursor-not-allowed hover:brightness-110">Book table</button>
-      </div>
+      ${edit ? '<div id="editPanel" class="mt-4"></div>' : footer}
     </div>`;
+
+  if (edit) return wireEdit(r);
+
+  $('#editL').onclick = () => { S.edit = true; S.draft = layoutFor(r).map(t => ({ ...t })); S.editSel = null; S.table = null; booking(r); };
   $('#bdate').onchange = e => { S.date = e.target.value || S.date; booking(r); };
   $('#bparty').onchange = e => { S.party = +e.target.value; booking(r); };
   document.querySelectorAll('[data-time]').forEach(b => b.onclick = () => { S.time = b.dataset.time; booking(r); });
@@ -170,6 +206,62 @@ function booking(r) {
     S.table = S.table === t.id ? null : t.id; booking(r);
   });
   $('#bookBtn').onclick = () => confirmBooking(r, sel);
+}
+
+/* ---------- Floor plan editor ---------- */
+function wireEdit(r) {
+  const cv = $('#canvas');
+  renderPanel(r);
+  cv.querySelectorAll('.tbl').forEach(b => {
+    b.onpointerdown = e => {
+      e.preventDefault();
+      const t = S.draft.find(x => x.id === b.dataset.id), rect = cv.getBoundingClientRect();
+      const offX = (e.clientX - rect.left) / rect.width * 100 - t.x, offY = (e.clientY - rect.top) / rect.height * 100 - t.y;
+      S.editSel = t.id;
+      cv.querySelectorAll('.tbl').forEach(el => el.classList.toggle('selected', el === b));
+      renderPanel(r);
+      b.setPointerCapture(e.pointerId);
+      const move = ev => {
+        const hx = 8, hy = 42 / rect.height * 100;
+        const px = (ev.clientX - rect.left) / rect.width * 100 - offX, py = (ev.clientY - rect.top) / rect.height * 100 - offY;
+        t.x = Math.min(100 - hx, Math.max(hx, Math.round(px / 2) * 2));
+        t.y = Math.min(100 - hy, Math.max(hy, Math.round(py / 2) * 2));
+        b.style.left = t.x + '%'; b.style.top = t.y + '%';
+      };
+      const up = () => { b.removeEventListener('pointermove', move); b.removeEventListener('pointerup', up); };
+      b.addEventListener('pointermove', move); b.addEventListener('pointerup', up);
+    };
+  });
+  $('#addT').onclick = () => {
+    let n = 1; while (S.draft.some(t => t.id === 'T-' + pad(n))) n++;
+    let pos = { x: 50, y: 50 };
+    outer: for (const y of [20, 50, 80, 35, 65]) for (const x of [10, 30, 50, 70, 90])
+      if (!S.draft.some(t => Math.abs(t.x - x) < 12 && Math.abs(t.y - y) < 22)) { pos = { x, y }; break outer; }
+    S.draft.push({ id: 'T-' + pad(n), seats: 4, ...pos }); S.editSel = 'T-' + pad(n); booking(r);
+  };
+  $('#resetL').onclick = () => { S.draft = defaultLayout(r); S.editSel = null; booking(r); };
+  $('#cancelE').onclick = () => { S.edit = false; S.draft = null; S.editSel = null; booking(r); };
+  $('#saveE').onclick = () => {
+    S.layouts[r.id] = S.draft.map(t => ({ ...t })); const ok = storeLayouts();
+    S.edit = false; S.draft = null; S.editSel = null; S.table = null; booking(r);
+    toast(ok ? 'Floor plan saved' : 'Saved for this session only (browser storage unavailable)');
+  };
+}
+
+function renderPanel(r) {
+  const p = $('#editPanel'), t = S.draft.find(x => x.id === S.editSel);
+  if (!t) { p.innerHTML = '<p class="text-sm text-neutral-500 px-1">Select a table to rename it, change its seats or delete it.</p>'; return; }
+  p.innerHTML = `<div class="flex flex-wrap items-end gap-4 bg-white border border-neutral-200 rounded-2xl p-4">
+    <label class="text-xs font-semibold text-neutral-500">Table name<input id="eName" value="${t.id}" maxlength="8" class="block mt-1 w-28 border border-neutral-200 rounded-xl px-3 py-2 text-sm text-ink outline-none focus:border-brand"></label>
+    <div><span class="text-xs font-semibold text-neutral-500">Seats</span><div class="flex gap-1 mt-1">${[2, 4, 6, 8].map(n => `<button data-seat="${n}" class="w-10 h-10 rounded-xl text-sm font-bold ${n === t.seats ? 'bg-brand text-white' : 'bg-neutral-100 hover:bg-neutral-200'}">${n}</button>`).join('')}</div></div>
+    <button id="delT" class="ml-auto rounded-full text-sm font-semibold text-red-600 bg-red-50 hover:bg-red-100 px-4 py-2">Delete table</button></div>`;
+  $('#eName').onchange = e => {
+    const v = e.target.value.trim();
+    if (v && !S.draft.some(x => x !== t && x.id === v)) { t.id = v; S.editSel = v; } else toast('Table names must be unique and not empty');
+    booking(r);
+  };
+  document.querySelectorAll('[data-seat]').forEach(b => b.onclick = () => { t.seats = +b.dataset.seat; booking(r); });
+  $('#delT').onclick = () => { S.draft = S.draft.filter(x => x !== t); S.editSel = null; booking(r); };
 }
 
 const fmt = s => [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(n => String(n).padStart(2, '0')).join(':') + 's';
@@ -208,5 +300,5 @@ function route() {
   const [, , id] = location.hash.split('/'), r = RESTAURANTS.find(x => x.id === id);
   if (r) restaurant(r); else home();
 }
-window.addEventListener('hashchange', () => { S.table = null; S.tab = 'book'; route(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { S.table = null; S.tab = 'book'; S.edit = false; route(); window.scrollTo(0, 0); });
 route();
